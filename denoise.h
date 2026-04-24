@@ -4,26 +4,14 @@
 #include <vector>
 #include <string>
 
-using Image = std::vector<std::vector<int>>;
+using namespace std;
 
-// ── I/O ──────────────────────────────────────────────
-Image loadImage(const std::string& filename);
-void  saveImage(const std::string& filename, const Image& img);
+typedef vector<vector<int>> Image;
 
-// ── Filters ──────────────────────────────────────────
-// Border policy: CLAMP (replicate edge pixels)
-Image applyMeanFilter(const Image& img);
-Image applyMedianFilter(const Image& img);
-
-// Run the chosen filter for k iterations
-Image denoise(const Image& img, const std::string& filter, int iterations);
-
-// ── Helpers ──────────────────────────────────────────
-int  clampValue(int v);                       // clamp to [0,255]
-int  getPixelClamped(const Image& img, int r, int c); // safe access
-void printStats(const std::string& label, const Image& img);
-
-// ── Noise generator (for testing) ────────────────────
-Image generateNoisyImage(int rows, int cols, int baseVal, int noiseCount, int seed);
+Image loadImage(string filename);
+void saveImage(string filename, Image img);
+Image applyMeanFilter(Image img);
+Image applyMedianFilter(Image img);
+void printStats(string label, Image img);
 
 #endif

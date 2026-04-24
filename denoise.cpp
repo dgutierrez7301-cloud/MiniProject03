@@ -1,209 +1,144 @@
 #include "denoise.h"
-#include <fstream>
 #include <iostream>
-#include <algorithm>
-#include <numeric>
-#include <stdexcept>
-#include <cstdlib>
+#include <fstream>
 #include <cmath>
-#include "denoise.h"
 
-// ═══════════════════════════════════════════════════════
-//  Helpers
-// ═══════════════════════════════════════════════════════
+using namespace std;
 
-int clampValue(int v) {
-    if (v < 0)   return 0;
+// keeps value between 0 and 255
+int clamp(int v) {
+    if (v < 0) return 0;
     if (v > 255) return 255;
     return v;
 }
 
-// Safe pixel access using CLAMP border policy:
-// If the requested row/col is outside the image, we pretend
-// it's the nearest edge pixel (like stretching the border).
-int getPixelClamped(const Image& img, int r, int c) {
-    int rows = static_cast<int>(img.size());
-    int cols = static_cast<int>(img[0].size());
-    r = std::max(0, std::min(r, rows - 1));
-    c = std::max(0, std::min(c, cols - 1));
+// gets a pixel safely - if out of bounds, uses nearest edge pixel
+int getPixel(Image img, int r, int c) {
+    int rows = img.size();
+    int cols = img[0].size();
+    if (r < 0) r = 0;
+    if (r >= rows) r = rows - 1;
+    if (c < 0) c = 0;
+    if (c >= cols) c = cols - 1;
     return img[r][c];
 }
 
-// ═══════════════════════════════════════════════════════
-//  I/O
-// ═══════════════════════════════════════════════════════
-
-Image loadImage(const std::string& filename) {
-    std::ifstream fin(filename);
+Image loadImage(string filename) {
+    ifstream fin(filename);
     if (!fin.is_open()) {
-        throw std::runtime_error("Cannot open input file: " + filename);
+        cout << "Error: cannot open " << filename << endl;
+        exit(1);
     }
 
     int rows, cols;
     fin >> rows >> cols;
-    if (rows <= 0 || cols <= 0) {
-        throw std::runtime_error("Invalid dimensions in file");
-    }
 
-    Image img(rows, std::vector<int>(cols));
+    Image img(rows, vector<int>(cols));
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
-            if (!(fin >> img[r][c])) {
-                throw std::runtime_error("Not enough pixel data in file");
-            }
-            img[r][c] = clampValue(img[r][c]);  // sanitize on load
+            fin >> img[r][c];
+            img[r][c] = clamp(img[r][c]);
         }
     }
+    fin.close();
     return img;
 }
 
-void saveImage(const std::string& filename, const Image& img) {
-    std::ofstream fout(filename);
-    if (!fout.is_open()) {
-        throw std::runtime_error("Cannot open output file: " + filename);
-    }
-
-    int rows = static_cast<int>(img.size());
-    int cols = static_cast<int>(img[0].size());
-    fout << rows << " " << cols << "\n";
+void saveImage(string filename, Image img) {
+    ofstream fout(filename);
+    int rows = img.size();
+    int cols = img[0].size();
+    fout << rows << " " << cols << endl;
 
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
             if (c > 0) fout << " ";
             fout << img[r][c];
         }
-        fout << "\n";
+        fout << endl;
     }
+    fout.close();
 }
 
-// ═══════════════════════════════════════════════════════
-//  Mean Filter (3×3)
-// ═══════════════════════════════════════════════════════
-//  For each pixel, replace it with the average of itself
-//  and its 8 neighbors. Like asking "what's the consensus
-//  value around here?" — smooths out lone outliers.
-
-Image applyMeanFilter(const Image& img) {
-    int rows = static_cast<int>(img.size());
-    int cols = static_cast<int>(img[0].size());
-    Image out(rows, std::vector<int>(cols));
+// replaces each pixel with average of its 3x3 neighborhood
+Image applyMeanFilter(Image img) {
+    int rows = img.size();
+    int cols = img[0].size();
+    Image out(rows, vector<int>(cols));
 
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
             int sum = 0;
             for (int dr = -1; dr <= 1; dr++) {
                 for (int dc = -1; dc <= 1; dc++) {
-                    sum += getPixelClamped(img, r + dr, c + dc);
+                    sum += getPixel(img, r + dr, c + dc);
                 }
             }
-            out[r][c] = clampValue(sum / 9);
+            out[r][c] = clamp(sum / 9);
         }
     }
     return out;
 }
 
-// ═══════════════════════════════════════════════════════
-//  Median Filter (3×3)
-// ═══════════════════════════════════════════════════════
-//  For each pixel, collect all 9 neighbors, sort them,
-//  and pick the middle value. This is great at killing
-//  "salt and pepper" noise because outliers can't survive
-//  a vote — like picking the median salary in a room;
-//  one billionaire doesn't skew it.
-
-Image applyMedianFilter(const Image& img) {
-    int rows = static_cast<int>(img.size());
-    int cols = static_cast<int>(img[0].size());
-    Image out(rows, std::vector<int>(cols));
+// replaces each pixel with median of its 3x3 neighborhood
+Image applyMedianFilter(Image img) {
+    int rows = img.size();
+    int cols = img[0].size();
+    Image out(rows, vector<int>(cols));
 
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
+            // collect 9 neighbors
             int neighbors[9];
             int idx = 0;
             for (int dr = -1; dr <= 1; dr++) {
                 for (int dc = -1; dc <= 1; dc++) {
-                    neighbors[idx++] = getPixelClamped(img, r + dr, c + dc);
+                    neighbors[idx] = getPixel(img, r + dr, c + dc);
+                    idx++;
                 }
             }
-            std::sort(neighbors, neighbors + 9);
-            out[r][c] = neighbors[4];  // middle of 9 sorted values
+            // simple bubble sort
+            for (int i = 0; i < 9; i++) {
+                for (int j = i + 1; j < 9; j++) {
+                    if (neighbors[j] < neighbors[i]) {
+                        int temp = neighbors[i];
+                        neighbors[i] = neighbors[j];
+                        neighbors[j] = temp;
+                    }
+                }
+            }
+            out[r][c] = neighbors[4]; // middle value
         }
     }
     return out;
 }
 
-// ═══════════════════════════════════════════════════════
-//  Denoise driver — applies chosen filter k times
-// ═══════════════════════════════════════════════════════
-
-Image denoise(const Image& img, const std::string& filter, int iterations) {
-    Image current = img;
-    for (int i = 0; i < iterations; i++) {
-        if (filter == "mean") {
-            current = applyMeanFilter(current);
-        } else if (filter == "median") {
-            current = applyMedianFilter(current);
-        } else {
-            throw std::runtime_error("Unknown filter: " + filter +
-                                     " (use 'mean' or 'median')");
-        }
-    }
-    return current;
-}
-
-// ═══════════════════════════════════════════════════════
-//  Statistics
-// ═══════════════════════════════════════════════════════
-
-void printStats(const std::string& label, const Image& img) {
+void printStats(string label, Image img) {
     int minVal = 255, maxVal = 0;
     long long sum = 0;
     int count = 0;
 
-    for (const auto& row : img) {
-        for (int v : row) {
-            minVal = std::min(minVal, v);
-            maxVal = std::max(maxVal, v);
-            sum += v;
+    for (int r = 0; r < (int)img.size(); r++) {
+        for (int c = 0; c < (int)img[0].size(); c++) {
+            if (img[r][c] < minVal) minVal = img[r][c];
+            if (img[r][c] > maxVal) maxVal = img[r][c];
+            sum += img[r][c];
             count++;
         }
     }
 
-    double mean = static_cast<double>(sum) / count;
-
-    // Compute standard deviation
+    double mean = (double)sum / count;
     double variance = 0;
-    for (const auto& row : img) {
-        for (int v : row) {
-            double diff = v - mean;
+    for (int r = 0; r < (int)img.size(); r++) {
+        for (int c = 0; c < (int)img[0].size(); c++) {
+            double diff = img[r][c] - mean;
             variance += diff * diff;
         }
     }
     variance /= count;
-    double stddev = std::sqrt(variance);
 
-    std::cout << "[" << label << "] "
-              << count << " pixels | "
-              << "min=" << minVal << " max=" << maxVal
-              << " mean=" << static_cast<int>(mean)
-              << " stddev=" << static_cast<int>(stddev)
-              << "\n";
-}
-
-// ═══════════════════════════════════════════════════════
-//  Noisy image generator (for testing)
-// ═══════════════════════════════════════════════════════
-
-Image generateNoisyImage(int rows, int cols, int baseVal,
-                         int noiseCount, int seed) {
-    std::srand(seed);
-    Image img(rows, std::vector<int>(cols, baseVal));
-
-    for (int i = 0; i < noiseCount; i++) {
-        int r = std::rand() % rows;
-        int c = std::rand() % cols;
-        // salt-and-pepper: randomly 0 or 255
-        img[r][c] = (std::rand() % 2 == 0) ? 0 : 255;
-    }
-    return img;
+    cout << "[" << label << "] " << count << " pixels | "
+         << "min=" << minVal << " max=" << maxVal
+         << " mean=" << (int)mean
+         << " stddev=" << (int)sqrt(variance) << endl;
 }
